@@ -1,0 +1,103 @@
+Description: >
+  Todd Strain / Udacity 2020 /Project 2 / Servers
+
+Parameters:
+  EnvironmentName:
+    Description: An environment name that will be prefixed to resource names
+    Type: String
+
+Resources:
+  IamInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - full_s3_access_from_ec2
+
+  WebInstanceSG:
+    Type: "AWS::EC2::SecurityGroup"
+    Properties:
+      GroupDescription: "Allow HTTP to the web servers"
+      VpcId:
+        Fn::ImportValue: !Sub "${EnvironmentName}-VPCID"
+      SecurityGroupIngress:
+        - IpProtocol: "tcp"
+          CidrIp: "0.0.0.0/0"
+          FromPort: 80
+          ToPort: 80
+        - IpProtocol: "tcp"
+          CidrIp: "192.168.10.0/24"
+          FromPort: 22
+          ToPort: 22
+      SecurityGroupEgress:
+        - IpProtocol: "tcp"
+          CidrIp: "0.0.0.0/0"
+          FromPort: 80
+          ToPort: 80
+        - IpProtocol: "tcp"
+          CidrIp: "0.0.0.0/0"
+          FromPort: 0
+          ToPort: 65535
+
+  JumpInstanceSG:
+    Type: "AWS::EC2::SecurityGroup"
+    Properties:
+      GroupDescription: "Allow SSH to the jump server"
+      VpcId:
+        Fn::ImportValue: !Sub "${EnvironmentName}-VPCID"
+      SecurityGroupIngress:
+        - IpProtocol: "tcp"
+          CidrIp: "0.0.0.0/0"
+          FromPort: 22
+          ToPort: 22
+      SecurityGroupEgress:
+        - IpProtocol: "tcp"
+          CidrIp: "0.0.0.0/0"
+          FromPort: 0
+          ToPort: 65535
+
+  JumpInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t2.nano
+      ImageId: ami-0d1cd67c26f5fca19
+      KeyName: iacp2-west
+      SecurityGroupIds:
+        - Ref: JumpInstanceSG
+      SubnetId:
+        Fn::ImportValue: !Sub "${EnvironmentName}-PUB1-SN"
+
+  AutoScalingLaunchConfig:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      BlockDeviceMappings:
+        - DeviceName: "/dev/sdb"
+          Ebs:
+            VolumeSize: "10"
+      ImageId: ami-0d1cd67c26f5fca19
+      InstanceType: t3.medium
+      # KeyName: iacp2-west
+      IamInstanceProfile: !Ref IamInstanceProfile
+      SecurityGroups:
+        - Ref: WebInstanceSG
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          apt-get update -y
+          apt-get install unzip awscli -y
+          apt-get install apache2 -y
+          systemctl start apache2.service
+          cd /var/www/html
+          aws s3 cp s3://udacity-demo-1/udacity.zip .
+          unzip -o udacity.zip
+
+  AutoScalingGroup:
+    Type: "AWS::AutoScaling::AutoScalingGroup"
+    Properties:
+      VPCZoneIdentifier:
+        - Fn::ImportValue: !Sub "${EnvironmentName}-PRI-NETS"
+      LaunchConfigurationName:
+        Ref: AutoScalingLaunchConfig
+      MinSize: "2"
+      MaxSize: "4"
+      TargetGroupARNs:
+        - Fn::ImportValue: !Sub "${EnvironmentName}-NETLB-TG"
